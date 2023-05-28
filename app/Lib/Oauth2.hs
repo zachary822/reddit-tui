@@ -104,8 +104,8 @@ redditAccessToken oauth refreshToken = do
   resp <- httpJSON req'
   return $ getResponseBody resp
 
-redditGetEndpoint :: (MonadThrow m, MonadIO m, FromJSON a) => String -> String -> Cursor String -> m a
-redditGetEndpoint accessToken endpoint cursor = do
+redditGetEndpoint :: (MonadThrow m, MonadIO m, FromJSON a) => String -> String -> Cursor String -> Query -> m a
+redditGetEndpoint accessToken endpoint cursor opts = do
   req <- parseRequest ("https://oauth.reddit.com" ++ endpoint)
   let req' =
         req
@@ -125,7 +125,7 @@ redditGetEndpoint accessToken endpoint cursor = do
                 Before c -> [("before", Just $ C8.pack c)]
             )
 
-  let req'' = addToRequestQueryString qs req'
+  let req'' = addToRequestQueryString (qs <> opts) req'
 
   resp <- httpJSON req''
   return $ getResponseBody resp

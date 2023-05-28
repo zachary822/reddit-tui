@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Lib.Reddit where
@@ -6,15 +7,15 @@ module Lib.Reddit where
 import Control.Exception
 import Data.Aeson
 import Data.Aeson.Types
-import Data.Text
+import Data.Text qualified as T
 import GHC.Generics
 
 data Link = Link
   { subreddit :: String
   , linkId :: String
   , author :: String
-  , title :: Text
-  , selfText :: Maybe Text
+  , title :: T.Text
+  , selfText :: Maybe T.Text
   , url :: String
   , destUrl :: Maybe String
   }

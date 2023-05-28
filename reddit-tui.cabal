@@ -64,7 +64,8 @@ executable reddit-tui
 
     -- Modules included in this executable, other than Main.
     other-modules:    Lib.Oauth2,
-                      Lib.Reddit
+                      Lib.Reddit,
+                      Lib.Utils
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -88,7 +89,8 @@ executable reddit-tui
                       transformers,
                       vector,
                       mtl,
-                      pandoc
+                      pandoc,
+                      html-entities
 
     -- Directories containing source files.
     hs-source-dirs:   app
