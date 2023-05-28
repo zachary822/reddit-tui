@@ -87,7 +87,8 @@ executable reddit-tui
                       vty,
                       transformers,
                       vector,
-                      mtl
+                      mtl,
+                      pandoc
 
     -- Directories containing source files.
     hs-source-dirs:   app
