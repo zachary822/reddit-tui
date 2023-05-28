@@ -13,7 +13,8 @@ import Control.Monad.IO.Class
 import Control.Monad.State qualified as MS
 import Control.Monad.Trans.State qualified as S
 import Crypto.Random
-import Data.Aeson hiding (Success)
+import Data.Aeson (Array, FromJSON (parseJSON), Object, eitherDecodeFileStrict', encode)
+import Data.Aeson.Types (parseMaybe)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Builder (byteString, toLazyByteString)
@@ -37,10 +38,8 @@ import Data.Vector qualified as Vec
 import Graphics.Vty qualified as V
 import Graphics.Vty.Input.Events
 
-import Debug.Trace
-
 data CustomEvent = GetPosts | GetPostsResult [Link] (Cursor String) deriving (Show)
-data Name = Posts | Post | Comments deriving (Eq, Ord, Show)
+data Name = PostsName | PostName | CommentsName deriving (Eq, Ord, Show)
 
 type LinkList = L.List Name Link
 
@@ -64,22 +63,22 @@ linkWidget l = case destUrl l of
  where
   w =
     txt "* "
-      <+> withAttr (attrName "subreddit") (str $ "(/r/" <> subreddit l <> ") ")
+      <+> withAttr (attrName "subreddit") (str $ "(/r/" <> postSubreddit l <> ") ")
       <+> (txt . T.filter notSymbol $ title l)
 
 renderPostWidget :: Link -> Widget Name
 renderPostWidget e =
-  reportExtent Post $ case mt of
-    Just t -> viewport Post Vertical . txtWrap $ t
-    Nothing -> txtWrap $ fromMaybe (T.pack $ url e) (T.pack <$> destUrl e)
+  case mt of
+    Just t -> viewport PostName Vertical . txtWrap $ t
+    Nothing -> reportExtent PostName . txtWrap $ fromMaybe (T.pack $ url e) (T.pack <$> destUrl e)
  where
   mt = selfText e >>= renderPostBody
 
 renderCommentWidget :: Bool -> Widget Name
 renderCommentWidget focused =
-  reportExtent Comments $
+  reportExtent CommentsName $
     B.hBorderWithLabel (renderFocused focused (txt "Comments"))
-      <=> ( viewport Comments Vertical $
+      <=> ( viewport CommentsName Vertical $
               txt "yay!"
           )
 
@@ -99,22 +98,22 @@ drawUI st = [postLayer, ui]
   box =
     B.borderWithLabel label $
       withVScrollBars OnRight $
-        clickable Posts $
-          L.renderList listDrawElement (fn == Posts) $
+        clickable PostsName $
+          L.renderList listDrawElement (fn == PostsName) $
             postsState st
   helpText = txt "Press Q to exit"
   ui = vBox [box, helpText]
   postLayer =
     case fn of
-      Posts -> emptyWidget
+      PostsName -> emptyWidget
       _ ->
         withVScrollBars OnRight . joinBorders $
           ( maybe
               emptyWidget
               ( \(_, e) ->
-                  ( B.borderWithLabel (renderFocused (fn == Post) (txt . T.filter notSymbol . title $ e)) $
+                  ( B.borderWithLabel (renderFocused (fn == PostName) (txt . T.filter notSymbol . title $ e)) $
                       renderPostWidget e
-                        <=> renderCommentWidget (fn == Comments)
+                        <=> renderCommentWidget (fn == CommentsName)
                   )
               )
               $ L.listSelectedElement (postsState st)
@@ -161,7 +160,7 @@ appEvent (AppEvent (GetPostsResult posts cursor)) = do
       { postsState = (L.listReplace (L.listElements nl <> Vec.fromList posts) curr nl)
       , postsCursor = cursor
       }
-appEvent (MouseDown Posts BLeft [] (Location (_, y))) = do
+appEvent (MouseDown PostsName BLeft [] (Location (_, y))) = do
   st <- MS.get
   let l = (postsState st)
   nl <- nestEventM' l (MS.modify $ L.listMoveTo y)
@@ -170,18 +169,18 @@ appEvent (VtyEvent e) = do
   st <- MS.get
   case e of
     EvKey (KChar 'q') [] -> halt
-    EvKey KEsc [] -> MS.put (st{focusedName = Posts})
+    EvKey KEsc [] -> MS.put (st{focusedName = PostsName})
     EvKey key [] -> do
       let fn = focusedName st
       let vp = viewportScroll fn
       -- TODO scrolling is scuffed
       case fn of
-        Posts ->
+        PostsName ->
           ( case key of
               KEnter -> do
-                vScrollToBeginning $ viewportScroll Post
-                vScrollToBeginning $ viewportScroll Comments
-                (MS.put (st{focusedName = Post}))
+                vScrollToBeginning $ viewportScroll PostName
+                vScrollToBeginning $ viewportScroll CommentsName
+                (MS.put (st{focusedName = PostName}))
               _ -> loadNextPage e
           )
         _ ->
@@ -191,8 +190,8 @@ appEvent (VtyEvent e) = do
                     ( st
                         { focusedName =
                             ( case fn of
-                                Comments -> Post
-                                Post -> Comments
+                                CommentsName -> PostName
+                                PostName -> CommentsName
                                 _ -> fn
                             )
                         }
@@ -219,12 +218,7 @@ customApp =
         vty <- getVtyHandle
         liftIO $ V.setMode (V.outputIface vty) V.Mouse True
         bchan <- appBChan <$> MS.get
-
-        let output = V.outputIface vty
-        liftIO $ do
-          (_, h) <- V.displayBounds output
-          print h
-          replicateM_ (ceiling $ (fromIntegral h / 25 :: Double) :: Int) (writeBChanNonBlocking bchan GetPosts)
+        liftIO $ void $ writeBChanNonBlocking bchan GetPosts
     , appAttrMap = const theMap
     }
 
@@ -271,16 +265,16 @@ main = do
 
       t <- access_token <$> redditAccessToken oauth (refresh_token token)
 
-      bchan <- newBChan 10
+      bchan <- newBChan 1
 
       let initialState =
             AppState
-              { postsState = L.list Posts Vec.empty 1
+              { postsState = L.list PostsName Vec.empty 1
               , postsCursor = NoCursor
-              , commentState = L.list Comments Vec.empty 1
+              , commentState = L.list CommentsName Vec.empty 1
               , commentCursor = NoCursor
               , tokenState = t
-              , focusedName = Posts
+              , focusedName = PostsName
               , appBChan = bchan
               }
       let buildVty = V.mkVty V.defaultConfig
@@ -288,8 +282,8 @@ main = do
 
       void $ customMain initialVty buildVty (Just bchan) customApp initialState
 
-    -- links <- (redditGetEndpoint t ("/comments/13tjc39") NoCursor [("showtitle", Just "0")] :: IO Value)
-    -- BS.putStr $ BS.toStrict $ encode links
+      -- comments <- (redditGetEndpoint t ("/comments/13tjc39") NoCursor [("showtitle", Just "0")] :: IO Array)
+      -- print $ (flip parseMaybe comments (parseJSON . Vec.last) :: Maybe (Listing Link))
     Left _ -> do
       chan <- (newTChanIO :: IO (TChan TokenStatus))
 
