@@ -13,7 +13,6 @@ import Control.Monad.IO.Class
 import Control.Monad.State qualified as MS
 import Control.Monad.Trans.State qualified as S
 import Crypto.Random
-import Data.Aeson (eitherDecodeFileStrict')
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Builder (byteString, toLazyByteString)
@@ -300,9 +299,6 @@ oauth =
     , scopes = ["submit", "save", "read", "history", "subscribe"]
     }
 
-getToken :: FilePath -> IO (Either String RedditToken)
-getToken p = eitherDecodeFileStrict' p
-
 getNextPosts :: (MonadThrow m, MonadIO m) => String -> S.StateT (Cursor String) m [Link]
 getNextPosts token = do
   cursor <- S.get
@@ -344,8 +340,6 @@ main = do
 
   case eitherToken of
     Right token -> do
-      putStrLn "Starting..."
-
       t <- access_token <$> redditAccessToken oauth (refresh_token token)
 
       bchan <- newBChan 1
@@ -384,3 +378,4 @@ main = do
               Success -> threadDelay 1000000
               Fail -> error "Token fetching went terribly."
         )
+      main

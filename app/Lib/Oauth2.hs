@@ -10,7 +10,6 @@ import Control.Monad.IO.Class
 import Data.Aeson hiding (Success)
 import Data.ByteString.Char8 qualified as C8
 import Data.List (intersperse)
-import Debug.Trace
 import GHC.Generics
 import Lib.Reddit
 import Network.HTTP.Conduit
@@ -141,7 +140,6 @@ oauthCallback oauth state chan tokenPath = do
   code <- (Scotty.param "code" :: ActionM String)
 
   result <- redditCode oauth code
-  traceShowM result
 
   liftIO $ encodeFile tokenPath result
 
