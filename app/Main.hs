@@ -47,6 +47,7 @@ data CustomEvent
 data Name
   = PostsName
   | PostName
+  | PostBodyName
   | CommentsName
   deriving (Eq, Ord, Show)
 
@@ -77,8 +78,8 @@ linkWidget l = case destUrl l of
 
 renderPostWidget :: Link -> Widget Name
 renderPostWidget e =
-  case mt of
-    Just t -> u <=> txtWrap t
+  reportExtent PostBodyName $ case mt of
+    Just t -> u <=> txt t
     Nothing -> txtWrap $ fromMaybe (T.pack $ url e) (T.pack <$> destUrl e)
  where
   u = padBottom (Pad 1) . str $ url e
@@ -121,45 +122,51 @@ commentListDrawElement a =
     More{} -> txt "more..."
     _ -> txt ""
 
-drawUI :: AppState -> [Widget Name]
-drawUI st = [postLayer, ui]
+drawPostsUI :: AppState -> Widget Name
+drawPostsUI st = vBox [box, helpText]
  where
   label = txt "Item " <+> cur <+> txt " of " <+> total
   cur = case L.listSelected $ postsState st of
     Nothing -> txt "-"
     Just i -> str (show $ i + 1)
   total = str . show . Vec.length . L.listElements $ postsState st
-  sp = showPost st
   box =
     B.borderWithLabel label $
       withVScrollBars OnRight $
-        clickable PostsName $
-          L.renderList postListDrawElement (not sp) $
-            postsState st
+        L.renderList postListDrawElement True $
+          postsState st
   helpText = txt "Press Q to exit"
-  ui = vBox [box, helpText]
-  postLayer =
-    if not sp
-      then emptyWidget
-      else
-        withVScrollBars OnRight . joinBorders $
-          ( maybe
-              emptyWidget
-              ( \(_, e) ->
-                  ( B.borderWithLabel
-                      (renderVotes (pUpVote e) (pDownVote e) <+> (txt . (" " <>) . T.filter notSymbol . title $ e))
-                      $ viewport PostName Vertical
-                      $ (renderPostWidget e)
-                        <=> renderCommentWidget (commentState st)
-                  )
-              )
-              $ L.listSelectedElement (postsState st)
-          )
 
-loadNextPage :: Event -> EventM Name AppState ()
-loadNextPage e = do
+drawPostUI :: AppState -> Widget Name
+drawPostUI st =
+  reportExtent CommentsName
+    . withVScrollBars OnRight
+    . joinBorders
+    $ ( maybe
+          emptyWidget
+          renderSelected
+          $ L.listSelectedElement (postsState st)
+      )
+ where
+  renderSelected (_, e) =
+    B.borderWithLabel
+      (renderVotes (pUpVote e) (pDownVote e) <+> (txt . (" " <>) . T.filter notSymbol . title $ e))
+      . viewport PostName Vertical
+      $ (renderPostWidget e)
+        <=> renderCommentWidget (commentState st)
+
+drawUI :: AppState -> [Widget Name]
+drawUI st = [ui]
+ where
+  ui =
+    if not $ showPost st
+      then drawPostsUI st
+      else drawPostUI st
+
+loadNextPage :: EventM Name AppState ()
+loadNextPage = do
   st <- MS.get
-  nl <- nestEventM' (postsState st) $ L.handleListEventVi L.handleListEvent e
+  let nl = postsState st
   let total = Vec.length . L.listElements $ nl
   let curr = L.listSelected nl
   let end = case curr of
@@ -169,6 +176,15 @@ loadNextPage e = do
     then liftIO $ void $ writeBChanNonBlocking (appBChan st) GetPosts
     else return ()
   MS.put st{postsState = nl}
+
+handleNestedPostsState :: EventM n LinkList b -> EventM n AppState AppState
+handleNestedPostsState e = do
+  st <- MS.get
+  let l = (postsState st)
+  nl <- nestEventM' l e
+  let nst = st{postsState = nl}
+  MS.put nst
+  return nst
 
 appEvent :: BrickEvent Name CustomEvent -> EventM Name AppState ()
 appEvent (AppEvent GetPosts) = do
@@ -202,27 +218,31 @@ appEvent (AppEvent (GetPostsResult posts cursor)) = do
       }
 appEvent (AppEvent (GetCommentsResult comments)) =
   MS.modify $ \st -> st{commentState = comments}
-appEvent (MouseDown PostsName BLeft [] (Location (_, y))) = do
-  st <- MS.get
-  let l = (postsState st)
-  nl <- nestEventM' l (MS.modify $ L.listMoveTo y)
-  MS.put $ st{postsState = nl}
+appEvent (VtyEvent (EvKey (KChar 'q') [])) = halt
 appEvent (VtyEvent e) = do
   st <- MS.get
+  let sp = showPost st
   case e of
-    EvKey (KChar 'q') [] -> halt
-    EvKey KEsc [] -> MS.put (st{showPost = False})
-    EvKey key [] -> do
-      let vp = viewportScroll PostName
-      -- TODO scrolling is scuffed
-      if not $ showPost st
-        then
+    EvKey KEsc [] -> MS.modify $ \s -> (s{showPost = False})
+    EvKey key []
+      | sp ->
+          ( do
+              let vp = viewportScroll PostName
+              case key of
+                KUp -> vScrollBy vp (-1)
+                KDown -> vScrollBy vp 1
+                KPageUp -> vScrollPage vp Up
+                KPageDown -> vScrollPage vp Down
+                KHome -> vScrollToBeginning vp
+                KEnd -> vScrollToEnd vp
+                _ -> return ()
+          )
+      | not sp ->
           ( case key of
               KEnter -> do
                 vScrollToBeginning $ viewportScroll PostName
-                vScrollToBeginning $ viewportScroll CommentsName
 
-                MS.put (st{showPost = True, commentState = []})
+                MS.modify $ \s -> s{showPost = True, commentState = []}
                 let bchan = appBChan st
                 void $ runMaybeT $ do
                   (_, el) <- hoistMaybe . L.listSelectedElement $ (postsState st)
@@ -230,19 +250,13 @@ appEvent (VtyEvent e) = do
                     Post{postId = pid} -> do
                       liftIO $ writeBChan bchan (GetComments pid)
                     _ -> return ()
-              _ -> loadNextPage e
+              _ -> do
+                void $ handleNestedPostsState (L.handleListEventVi L.handleListEvent e)
+                loadNextPage
           )
-        else
-          ( case key of
-              KUp -> vScrollBy vp (-1)
-              KDown -> vScrollBy vp 1
-              KPageUp -> vScrollPage vp Up
-              KPageDown -> vScrollPage vp Down
-              KHome -> vScrollToBeginning vp
-              KEnd -> vScrollToEnd vp
-              _ -> return ()
-          )
-    _ -> loadNextPage e
+    _ -> do
+      void $ handleNestedPostsState (L.handleListEventVi L.handleListEvent e)
+      loadNextPage
 appEvent _ = return ()
 
 oauth :: Oauth2
@@ -261,8 +275,6 @@ customApp =
     , appChooseCursor = showFirstCursor
     , appHandleEvent = appEvent
     , appStartEvent = do
-        vty <- getVtyHandle
-        liftIO $ V.setMode (V.outputIface vty) V.Mouse True
         bchan <- appBChan <$> MS.get
         liftIO $ void $ writeBChanNonBlocking bchan GetPosts
     , appAttrMap = const theMap
@@ -303,7 +315,8 @@ main = do
               , appBChan = bchan
               , showPost = False
               }
-      let buildVty = V.mkVty V.defaultConfig
+
+      let buildVty = V.mkVty =<< V.standardIOConfig
       initialVty <- buildVty
 
       void $ customMain initialVty buildVty (Just bchan) customApp initialState
