@@ -2,7 +2,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Lib.Oauth2 where
+module Lib.Reddit.Oauth2 where
 
 import Control.Concurrent.STM
 import Control.Monad.Catch
@@ -11,7 +11,7 @@ import Data.Aeson hiding (Success)
 import Data.ByteString.Char8 qualified as C8
 import Data.List (intersperse)
 import GHC.Generics
-import Lib.Reddit
+import Lib.Reddit.Types
 import Network.HTTP.Conduit
 import Network.HTTP.Simple
 import Network.URI (escapeURIString, isAllowedInURI)

@@ -2,7 +2,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Lib.Reddit where
+module Lib.Reddit.Types where
 
 import Control.Exception
 import Control.Monad

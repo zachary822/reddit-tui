@@ -63,9 +63,10 @@ executable reddit-tui
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
-    other-modules:    Lib.Oauth2,
-                      Lib.Reddit,
-                      Lib.Utils
+    other-modules:    Lib.Reddit.Oauth2,
+                      Lib.Reddit.Types,
+                      Lib.Utils,
+                      Lib.Api
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

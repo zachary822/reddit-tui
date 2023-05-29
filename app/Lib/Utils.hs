@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Text.Lazy (toStrict)
 import Data.Text.Lazy.Builder (toLazyText)
 import HTMLEntities.Decoder (htmlEncodedText)
-import Lib.Oauth2 (RedditToken)
+import Lib.Reddit.Oauth2 (RedditToken)
 import Text.Pandoc (def, readHtml, runPure, writeMarkdown)
 import Text.Pandoc.Sources (ToSources)
 

@@ -8,7 +8,6 @@ import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
 import Control.Monad
-import Control.Monad.Catch
 import Control.Monad.IO.Class
 import Control.Monad.State qualified as MS
 import Control.Monad.Trans.State qualified as S
@@ -20,8 +19,9 @@ import Data.ByteString.Char8 qualified as C8
 import Data.Char
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
-import Lib.Oauth2
-import Lib.Reddit
+import Lib.Api
+import Lib.Reddit.Oauth2
+import Lib.Reddit.Types
 import Lib.Utils
 import System.Directory
 import Web.Scotty (scotty)
@@ -34,7 +34,6 @@ import Brick.Widgets.Border qualified as B
 import Brick.Widgets.List qualified as L
 import Control.Monad.Trans.Maybe
 import Data.Bits (Bits ((.|.)))
-import Data.List (intersperse)
 import Data.Vector qualified as Vec
 import Graphics.Vty qualified as V
 import Graphics.Vty.Input.Events
@@ -58,8 +57,8 @@ data AppState = AppState
   , postsCursor :: Cursor String
   , commentState :: [Link]
   , tokenState :: String
-  , focusedName :: Name
   , appBChan :: BChan CustomEvent
+  , showPost :: Bool
   }
 
 notSymbol :: Char -> Bool
@@ -79,20 +78,18 @@ linkWidget l = case destUrl l of
 renderPostWidget :: Link -> Widget Name
 renderPostWidget e =
   case mt of
-    Just t -> viewport PostName Vertical $ u <=> txtWrap t
-    Nothing -> reportExtent PostName . txtWrap $ fromMaybe (T.pack $ url e) (T.pack <$> destUrl e)
+    Just t -> u <=> txtWrap t
+    Nothing -> txtWrap $ fromMaybe (T.pack $ url e) (T.pack <$> destUrl e)
  where
   u = padBottom (Pad 1) . str $ url e
   mt = selfText e >>= renderHtml
 
-renderCommentWidget :: Bool -> [Link] -> Widget Name
-renderCommentWidget focused list =
+renderCommentWidget :: [Link] -> Widget Name
+renderCommentWidget list =
   reportExtent CommentsName $
-    B.borderWithLabel
-      (renderFocused focused (txt "Comments"))
-      ( viewport CommentsName Vertical $
-          if length list > 0 then (vBox $ map commentListDrawElement list) else txt "Fetching..."
-      )
+    B.hBorderWithLabel (txt "Comments")
+      <=> ( if length list > 0 then (vBox $ map commentListDrawElement list) else txt "Fetching..."
+          )
 
 renderFocused :: Bool -> Widget n -> Widget n
 renderFocused focused w =
@@ -132,30 +129,28 @@ drawUI st = [postLayer, ui]
     Nothing -> txt "-"
     Just i -> str (show $ i + 1)
   total = str . show . Vec.length . L.listElements $ postsState st
-  fn = focusedName st
+  sp = showPost st
   box =
     B.borderWithLabel label $
       withVScrollBars OnRight $
         clickable PostsName $
-          L.renderList postListDrawElement (fn == PostsName) $
+          L.renderList postListDrawElement (not sp) $
             postsState st
   helpText = txt "Press Q to exit"
   ui = vBox [box, helpText]
   postLayer =
-    case fn of
-      PostsName -> emptyWidget
-      _ ->
+    if not sp
+      then emptyWidget
+      else
         withVScrollBars OnRight . joinBorders $
           ( maybe
               emptyWidget
               ( \(_, e) ->
                   ( B.borderWithLabel
-                      ( renderFocused
-                          (fn == PostName)
-                          (renderVotes (pUpVote e) (pDownVote e) <+> (txt . (" " <>) . T.filter notSymbol . title $ e))
-                      )
-                      (renderPostWidget e)
-                      <=> renderCommentWidget (fn == CommentsName) (commentState st)
+                      (renderVotes (pUpVote e) (pDownVote e) <+> (txt . (" " <>) . T.filter notSymbol . title $ e))
+                      $ viewport PostName Vertical
+                      $ (renderPostWidget e)
+                        <=> renderCommentWidget (commentState st)
                   )
               )
               $ L.listSelectedElement (postsState st)
@@ -205,12 +200,8 @@ appEvent (AppEvent (GetPostsResult posts cursor)) = do
       { postsState = (L.listReplace (L.listElements nl <> Vec.fromList posts) curr nl)
       , postsCursor = cursor
       }
-appEvent (AppEvent (GetCommentsResult comments)) = do
-  st <- MS.get
-  MS.put
-    st
-      { commentState = comments
-      }
+appEvent (AppEvent (GetCommentsResult comments)) =
+  MS.modify $ \st -> st{commentState = comments}
 appEvent (MouseDown PostsName BLeft [] (Location (_, y))) = do
   st <- MS.get
   let l = (postsState st)
@@ -220,19 +211,18 @@ appEvent (VtyEvent e) = do
   st <- MS.get
   case e of
     EvKey (KChar 'q') [] -> halt
-    EvKey KEsc [] -> MS.put (st{focusedName = PostsName})
+    EvKey KEsc [] -> MS.put (st{showPost = False})
     EvKey key [] -> do
-      let fn = focusedName st
-      let vp = viewportScroll fn
+      let vp = viewportScroll PostName
       -- TODO scrolling is scuffed
-      case fn of
-        PostsName ->
+      if not $ showPost st
+        then
           ( case key of
               KEnter -> do
                 vScrollToBeginning $ viewportScroll PostName
                 vScrollToBeginning $ viewportScroll CommentsName
 
-                MS.put (st{focusedName = PostName, commentState = []})
+                MS.put (st{showPost = True, commentState = []})
                 let bchan = appBChan st
                 void $ runMaybeT $ do
                   (_, el) <- hoistMaybe . L.listSelectedElement $ (postsState st)
@@ -242,20 +232,8 @@ appEvent (VtyEvent e) = do
                     _ -> return ()
               _ -> loadNextPage e
           )
-        _ ->
+        else
           ( case key of
-              KChar '\t' ->
-                ( MS.put
-                    ( st
-                        { focusedName =
-                            ( case fn of
-                                CommentsName -> PostName
-                                PostName -> CommentsName
-                                _ -> fn
-                            )
-                        }
-                    )
-                )
               KUp -> vScrollBy vp (-1)
               KDown -> vScrollBy vp 1
               KPageUp -> vScrollPage vp Up
@@ -266,6 +244,15 @@ appEvent (VtyEvent e) = do
           )
     _ -> loadNextPage e
 appEvent _ = return ()
+
+oauth :: Oauth2
+oauth =
+  Oauth2
+    { cliendId = "uZXqaoPoTM6rcxDWjO5rhA"
+    , redirectUri = "http://localhost:3000/oauth2/callback"
+    , duration = Permanent
+    , scopes = ["submit", "save", "read", "history", "subscribe"]
+    }
 
 customApp :: App AppState CustomEvent Name
 customApp =
@@ -292,45 +279,6 @@ theMap =
     , (attrName "downvote", V.defAttr `V.withForeColor` V.blue `V.withStyle` (V.bold .|. V.dim))
     ]
 
-oauth :: Oauth2
-oauth =
-  Oauth2
-    { cliendId = "uZXqaoPoTM6rcxDWjO5rhA"
-    , redirectUri = "http://localhost:3000/oauth2/callback"
-    , duration = Permanent
-    , scopes = ["submit", "save", "read", "history", "subscribe"]
-    }
-
-getNextPosts :: (MonadThrow m, MonadIO m) => String -> S.StateT (Cursor String) m [Link]
-getNextPosts token = do
-  cursor <- S.get
-  resp <- redditGetEndpoint token "/" cursor []
-  S.put (after resp)
-  return $ children resp
-
-getComments :: (MonadThrow m, MonadIO m) => String -> String -> S.StateT (Cursor String) m [Link]
-getComments token cid = do
-  (_, comments) <-
-    ( redditGetEndpoint token ("/comments/" <> cid) NoCursor [("limit", Just "200"), ("sort", Just "top")] ::
-        (MonadThrow m, MonadIO m) => m (Listing, Listing)
-      )
-  return $ children comments
-
-getMoreComments :: (MonadThrow m, MonadIO m) => String -> String -> [String] -> S.StateT (Cursor String) m [Link]
-getMoreComments token name cids = do
-  moreComments <-
-    ( redditGetEndpoint
-        token
-        "/api/morechildren"
-        NoCursor
-        ( [ ("children", Just (C8.pack $ concat $ intersperse "," cids))
-          , ("link_id", Just (C8.pack name))
-          , ("api_type", Just "json")
-          ]
-        )
-      )
-  return $ things moreComments
-
 main :: IO ()
 main = do
   path <- getXdgDirectory XdgConfig "reddit-tui/"
@@ -352,8 +300,8 @@ main = do
               , postsCursor = NoCursor
               , commentState = []
               , tokenState = t
-              , focusedName = PostsName
               , appBChan = bchan
+              , showPost = False
               }
       let buildVty = V.mkVty V.defaultConfig
       initialVty <- buildVty
