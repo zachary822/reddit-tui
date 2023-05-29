@@ -90,7 +90,9 @@ renderCommentWidget focused list =
   reportExtent CommentsName $
     B.borderWithLabel
       (renderFocused focused (txt "Comments"))
-      (viewport CommentsName Vertical $ vBox $ map commentListDrawElement list)
+      ( viewport CommentsName Vertical $
+          if length list > 0 then (vBox $ map commentListDrawElement list) else txt "Fetching..."
+      )
 
 renderFocused :: Bool -> Widget n -> Widget n
 renderFocused focused w =
