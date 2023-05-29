@@ -5,6 +5,7 @@
 module Lib.Reddit where
 
 import Control.Exception
+import Control.Monad
 import Data.Aeson
 import Data.Aeson.Types
 import Data.Text qualified as T
@@ -15,6 +16,8 @@ data Link
       { postSubreddit :: String
       , postId :: String
       , postAuthor :: String
+      , pUpVote :: Integer
+      , pDownVote :: Integer
       , title :: T.Text
       , selfText :: Maybe T.Text
       , url :: String
@@ -24,14 +27,16 @@ data Link
       { commentSubreddit :: String
       , commentId :: String
       , commentAuthor :: String
+      , cUpVote :: Integer
+      , cDownVote :: Integer
       , commentBody :: Maybe T.Text
       , replies :: [Link]
       }
   | More
-      { moreId :: String
+      { moreName :: String
       , moreIds :: [String]
       }
-  deriving (Generic, Show)
+  deriving (Generic, Show, Eq)
 
 instance FromJSON Link where
   parseJSON = withObject "Link" $ \o -> do
@@ -39,17 +44,19 @@ instance FromJSON Link where
     d <- o .: "data"
     case k of
       "more" -> do
-        l <- d .: "id"
+        l <- d .: "name"
         cs <- d .: "children"
         return
           More
-            { moreId = l
+            { moreName = l
             , moreIds = cs
             }
       "t1" -> do
         s <- d .: "subreddit"
         l <- d .: "id"
         a <- d .: "author"
+        uv <- d .: "ups"
+        dv <- d .: "downs"
         b <- d .:? "body_html"
         r <- (d .: "replies" :: Parser Value)
         rs <- case r of
@@ -60,6 +67,8 @@ instance FromJSON Link where
             { commentSubreddit = s
             , commentId = l
             , commentAuthor = a
+            , cUpVote = uv
+            , cDownVote = dv
             , commentBody = b
             , replies = rs
             }
@@ -67,6 +76,8 @@ instance FromJSON Link where
         s <- d .: "subreddit"
         l <- d .: "id"
         a <- d .: "author"
+        uv <- d .: "ups"
+        dv <- d .: "downs"
         t <- d .: "title"
         st <- d .:? "selftext_html"
         u <- d .: "url"
@@ -77,6 +88,8 @@ instance FromJSON Link where
             { postSubreddit = s
             , postId = l
             , postAuthor = a
+            , pUpVote = uv
+            , pDownVote = dv
             , title = t
             , selfText = st
             , url = u
@@ -84,21 +97,27 @@ instance FromJSON Link where
             }
       _ -> throw (AesonException $ "bad kind: " <> k)
 
-data Cursor a = Before a | After a | NoCursor deriving (Show, Eq)
+instance ToJSON Link where
+  toEncoding = genericToEncoding defaultOptions
+
+data Cursor a = Before a | After a | NoCursor deriving (Generic, Show, Eq)
 
 instance Functor Cursor where
   fmap f (Before a) = Before (f a)
   fmap f (After a) = After (f a)
   fmap _ NoCursor = NoCursor
 
-data Listing a = Listing
+instance (ToJSON a) => ToJSON (Cursor a) where
+  toEncoding = genericToEncoding defaultOptions
+
+data Listing = Listing
   { before :: Cursor String
   , after :: Cursor String
-  , children :: [a]
+  , children :: [Link]
   }
-  deriving (Generic, Show)
+  deriving (Generic, Show, Eq)
 
-instance (FromJSON a) => FromJSON (Listing a) where
+instance FromJSON Listing where
   parseJSON = withObject "Listing" $ \o -> do
     d <- o .: "data"
     b <- d .:? "before"
@@ -106,3 +125,16 @@ instance (FromJSON a) => FromJSON (Listing a) where
     cs <- d .: "children"
 
     return $ Listing (maybe NoCursor Before b) (maybe NoCursor After a) cs
+
+instance ToJSON Listing where
+  toEncoding = genericToEncoding defaultOptions
+
+data MoreComments = MoreComments
+  { things :: [Link]
+  }
+  deriving (Generic, Show)
+
+instance FromJSON MoreComments where
+  parseJSON =
+    withObject "MoreComments" $
+      fmap MoreComments . ((.: "json") >=> (.: "data") >=> (.: "things"))
