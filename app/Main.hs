@@ -74,7 +74,7 @@ linkWidget l = case destUrl l of
     txt "* "
       <+> renderVotes (pUpVote l) (pDownVote l)
       <+> withAttr (attrName "subreddit") (str $ "(/r/" <> postSubreddit l <> ") ")
-      <+> (txt . T.filter notSymbol $ title l)
+      <+> (txt . T.filter notSymbol $ postTitle l)
 
 renderPostWidget :: Link -> Widget Name
 renderPostWidget e =
@@ -150,7 +150,7 @@ drawPostUI st =
  where
   renderSelected (_, e) =
     B.borderWithLabel
-      (renderVotes (pUpVote e) (pDownVote e) <+> (txt . (" " <>) . T.filter notSymbol . title $ e))
+      (renderVotes (pUpVote e) (pDownVote e) <+> (txt . (" " <>) . T.filter notSymbol . postTitle $ e))
       . viewport PostName Vertical
       $ (renderPostWidget e)
         <=> renderCommentWidget (commentState st)
@@ -265,7 +265,7 @@ oauth =
     { cliendId = "uZXqaoPoTM6rcxDWjO5rhA"
     , redirectUri = "http://localhost:3000/oauth2/callback"
     , duration = Permanent
-    , scopes = ["submit", "save", "read", "history", "subscribe"]
+    , scopes = ["submit", "save", "read", "history", "subscribe", "mysubreddits"]
     }
 
 customApp :: App AppState CustomEvent Name

@@ -14,14 +14,14 @@ import Lib.Reddit.Types
 getNextPosts :: (MonadThrow m, MonadIO m) => String -> S.StateT (Cursor String) m [Link]
 getNextPosts token = do
   cursor <- S.get
-  resp <- redditGetEndpoint token "/" cursor []
+  resp <- redditGetEndpoint token "/" cursor [("limit", Just "50")]
   S.put (after resp)
   return $ children resp
 
 getComments :: (MonadThrow m, MonadIO m) => String -> String -> S.StateT (Cursor String) m [Link]
 getComments token cid = do
   (_, comments) <-
-    ( redditGetEndpoint token ("/comments/" <> cid) NoCursor [("limit", Just "200"), ("sort", Just "top")] ::
+    ( redditGetEndpoint token ("/comments/" <> cid) NoCursor [] ::
         (MonadThrow m, MonadIO m) => m (Listing, Listing)
       )
   return $ children comments
@@ -40,3 +40,25 @@ getMoreComments token name cids = do
         )
       )
   return $ things moreComments
+
+getSubreddits :: (MonadThrow m, MonadIO m) => String -> S.StateT (Cursor String) m [Link]
+getSubreddits token = do
+  cursor <- S.get
+  resp <-
+    redditGetEndpoint
+      token
+      "/subreddits/mine/subscriber"
+      cursor
+      [("sr_detail", Just "0"), ("limit", Just "100")]
+  let next = after resp
+  S.put next
+
+  if next == NoCursor
+    then return $ children resp
+    else do
+      links <- getSubreddits token
+      return $ (children resp) <> links
+
+getAllSubreddits :: (MonadThrow m, MonadIO m) => String -> m [Link]
+getAllSubreddits token =
+  S.evalStateT (getSubreddits token) NoCursor

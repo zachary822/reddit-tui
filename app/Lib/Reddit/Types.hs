@@ -18,7 +18,7 @@ data Link
       , postAuthor :: String
       , pUpVote :: Integer
       , pDownVote :: Integer
-      , title :: T.Text
+      , postTitle :: T.Text
       , selfText :: Maybe T.Text
       , url :: String
       , destUrl :: Maybe String
@@ -35,6 +35,11 @@ data Link
   | More
       { moreName :: String
       , moreIds :: [String]
+      }
+  | SubReddit
+      { subredditId :: String
+      , subredditTitle :: String
+      , subredditType :: String
       }
   deriving (Generic, Show, Eq)
 
@@ -90,10 +95,21 @@ instance FromJSON Link where
             , postAuthor = a
             , pUpVote = uv
             , pDownVote = dv
-            , title = t
+            , postTitle = t
             , selfText = st
             , url = u
             , destUrl = du
+            }
+      "t5" -> do
+        l <- d .: "id"
+        t <- d .: "title"
+        p <- d .: "subreddit_type"
+
+        return
+          SubReddit
+            { subredditId = l
+            , subredditTitle = t
+            , subredditType = p
             }
       _ -> throw (AesonException $ "bad kind: " <> k)
 
