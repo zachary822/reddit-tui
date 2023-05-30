@@ -12,6 +12,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser)
 import Data.CaseInsensitive (CI, mk, original)
 import Data.Text qualified as T
+import Data.Time.Clock.POSIX (POSIXTime)
 import GHC.Generics (Generic)
 
 instance FromJSON (CI T.Text) where
@@ -31,6 +32,7 @@ data Link
       , selfText :: Maybe T.Text
       , url :: String
       , destUrl :: Maybe String
+      , postTimestamp :: POSIXTime
       }
   | Comment
       { commentSubreddit :: String
@@ -38,6 +40,7 @@ data Link
       , commentAuthor :: String
       , commentScore :: Integer
       , commentBody :: Maybe T.Text
+      , commentTimestamp :: POSIXTime
       , replies :: [Link]
       }
   | More
@@ -79,6 +82,8 @@ instance FromJSON Link where
         rs <- case r of
           Object ro -> (ro .: "data") >>= (.: "children")
           _ -> return mempty
+        tm <- d .: "created_utc"
+
         return
           Comment
             { commentSubreddit = s
@@ -86,6 +91,7 @@ instance FromJSON Link where
             , commentAuthor = a
             , commentScore = sc
             , commentBody = b
+            , commentTimestamp = tm
             , replies = rs
             }
       "t3" -> do
@@ -97,6 +103,7 @@ instance FromJSON Link where
         st <- d .:? "selftext_html"
         u <- d .: "url"
         du <- d .:? "url_overridden_by_dest"
+        tm <- d .: "created_utc"
 
         return
           Post
@@ -108,6 +115,7 @@ instance FromJSON Link where
             , selfText = st
             , url = u
             , destUrl = du
+            , postTimestamp = tm
             }
       "t5" -> do
         l <- d .: "id"

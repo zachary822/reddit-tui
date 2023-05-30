@@ -1,6 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-type-defaults #-}
 
 module Main where
 
@@ -38,6 +39,7 @@ import Brick.Widgets.List qualified as L
 import Control.Monad.Trans.Maybe (MaybeT (runMaybeT), hoistMaybe)
 import Data.Bits (Bits ((.|.)))
 import Data.List (sort)
+import Data.Time (TimeZone, getCurrentTimeZone)
 import Data.Vector qualified as Vec
 import Graphics.Vty qualified as V
 import Graphics.Vty.Input.Events
@@ -69,6 +71,7 @@ data AppState = AppState
   , showSubreddits :: Bool
   , subredditState :: LinkList
   , currentSubreddit :: Link
+  , localTz :: TimeZone
   }
 
 notSymbol :: Char -> Bool
@@ -84,21 +87,25 @@ linkWidget l = case destUrl l of
       <+> withAttr (attrName "subreddit") (str $ "(/r/" <> postSubreddit l <> ") ")
       <+> (txt . T.filter notSymbol $ postTitle l)
 
-renderPostWidget :: Link -> Widget Name
-renderPostWidget e =
-  reportExtent PostBodyName $ case mt of
-    Just t -> u <=> txt t
-    Nothing -> txtWrap $ fromMaybe (T.pack $ url e) (T.pack <$> destUrl e)
+renderPostWidget :: TimeZone -> Link -> Widget Name
+renderPostWidget tz e =
+  reportExtent PostBodyName $
+    header <=> case mt of
+      Just t -> (padBottom (Pad 1) . strWrap $ url e) <=> txtWrap t
+      Nothing -> txtWrap $ fromMaybe (T.pack $ url e) (T.pack <$> destUrl e)
  where
-  u = padBottom (Pad 1) . str $ url e
-  mt = selfText e >>= renderHtml
+  uwidget = withAttr (attrName "username") $ str ("/u/" <> (postAuthor e) <> " ")
+  twidget = str $ formatTimestamp tz (postTimestamp e)
+  header = uwidget <+> twidget
+  mt = renderHtml <=< selfText $ e
 
-renderCommentWidget :: [Link] -> Widget Name
-renderCommentWidget list =
-  reportExtent CommentsName $
-    B.hBorderWithLabel (txt "Comments")
-      <=> ( if length list > 0 then (vBox $ map commentListDrawElement list) else txt "Fetching..."
-          )
+renderCommentWidget :: TimeZone -> [Link] -> Widget Name
+renderCommentWidget tz list =
+  B.hBorderWithLabel (txt "Comments")
+    <=> ( if length list > 0
+            then (vBox $ map (commentListDrawElement tz) list)
+            else txt "Fetching..."
+        )
 
 renderFocused :: Bool -> Widget n -> Widget n
 renderFocused focused w =
@@ -116,21 +123,28 @@ renderVotes s =
       else withAttr (attrName "downvote")
 
 postListDrawElement :: Bool -> Link -> Widget Name
-postListDrawElement sel a =
-  let w = linkWidget a
+postListDrawElement sel p =
+  let w = linkWidget p
    in if sel
         then withAttr L.listSelectedAttr w
         else w
 
-commentListDrawElement :: Link -> Widget Name
-commentListDrawElement a = w
+commentListDrawElement :: TimeZone -> Link -> Widget Name
+commentListDrawElement tz comment = w
  where
-  w = case a of
-    Comment{commentBody = b, commentScore = sc} ->
-      renderVotes sc
-        <+> maybe emptyWidget txt (b >>= renderHtml)
+  w = case comment of
+    Comment{commentBody = b, commentScore = sc, commentAuthor = a, commentTimestamp = t, replies = rs} ->
+      ( renderVotes sc
+          <+> (withAttr (attrName "username") $ str (" /u/" <> a <> " "))
+          <+> (withAttr (attrName "timestamp") $ str (formatTimestamp tz t))
+      )
+        <=> maybe emptyWidget txt (b >>= renderHtml)
+        <=> ( if length rs > 0
+                then (padLeft (Pad 3) $ vBox (map (commentListDrawElement tz) rs))
+                else emptyWidget
+            )
     More{} -> txt "more..."
-    _ -> txt ""
+    _ -> emptyWidget
 
 drawPostsUI :: AppState -> Widget Name
 drawPostsUI st = vBox [box, helpText]
@@ -158,12 +172,13 @@ drawPostUI st =
           $ L.listSelectedElement (postsState st)
       )
  where
+  ltz = (localTz st)
   renderSelected (_, e) =
     B.borderWithLabel
       (renderVotes (postScore e) <+> (txt . (" " <>) . T.filter notSymbol . postTitle $ e))
       . viewport PostName Vertical
-      $ (renderPostWidget e)
-        <=> renderCommentWidget (commentState st)
+      $ (renderPostWidget ltz e)
+        <=> renderCommentWidget ltz (commentState st)
 
 drawSubredditListElement :: Bool -> Link -> Widget Name
 drawSubredditListElement sel l =
@@ -349,6 +364,8 @@ theMap =
     , (attrName "subreddit", V.defAttr `V.withForeColor` V.yellow)
     , (attrName "upvote", V.defAttr `V.withForeColor` V.red `V.withStyle` V.bold)
     , (attrName "downvote", V.defAttr `V.withForeColor` V.blue `V.withStyle` (V.bold .|. V.dim))
+    , (attrName "username", V.defAttr `V.withForeColor` V.cyan)
+    , (attrName "timestamp", V.defAttr `V.withForeColor` V.color240 63 63 63)
     ]
 
 main :: IO ()
@@ -382,6 +399,7 @@ main = do
                 subreddits <- S.evalStateT (getAllSubreddits t) NoCursor
                 writeBChan bchan (GetSubredditsResult subreddits)
             )
+      tz <- getCurrentTimeZone
 
       let initialState =
             AppState
@@ -394,6 +412,7 @@ main = do
               , showSubreddits = False
               , subredditState = L.list SubredditsName Vec.empty 1
               , currentSubreddit = Vec.head defaultSubs
+              , localTz = tz
               }
 
       let buildVty = do

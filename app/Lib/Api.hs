@@ -69,7 +69,7 @@ getNextPosts token path = do
 getComments :: (MonadThrow m, MonadIO m) => String -> String -> S.StateT (Cursor String) m [Link]
 getComments token cid = do
   (_, comments) <-
-    ( redditGetEndpoint token ("/comments/" <> cid) NoCursor [] ::
+    ( redditGetEndpoint token ("/comments/" <> cid) NoCursor [("limit", Just "200")] ::
         (MonadThrow m, MonadIO m) => m (Listing, Listing)
       )
   return $ children comments
