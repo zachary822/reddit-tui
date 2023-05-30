@@ -1,5 +1,6 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedLists #-}
 
 module Lib.Api where
 
@@ -8,13 +9,60 @@ import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Trans.State qualified as S
 import Data.ByteString.Char8 qualified as C8
 import Data.List (intersperse)
+import Data.Vector (Vector)
 import Lib.Reddit.Oauth2
 import Lib.Reddit.Types
 
-getNextPosts :: (MonadThrow m, MonadIO m) => String -> S.StateT (Cursor String) m [Link]
-getNextPosts token = do
+defaultSubs :: Vector Link
+defaultSubs =
+  [ Subreddit
+      { subredditId = ""
+      , subredditType = "public"
+      , subredditUrl = "/"
+      , subredditDisplayName = "Home"
+      }
+  , Subreddit
+      { subredditId = ""
+      , subredditType = "public"
+      , subredditUrl = "/best"
+      , subredditDisplayName = "Best"
+      }
+  , Subreddit
+      { subredditId = ""
+      , subredditType = "public"
+      , subredditUrl = "/hot"
+      , subredditDisplayName = "Hot"
+      }
+  , Subreddit
+      { subredditId = ""
+      , subredditType = "public"
+      , subredditUrl = "/new"
+      , subredditDisplayName = "New"
+      }
+  , Subreddit
+      { subredditId = ""
+      , subredditType = "public"
+      , subredditUrl = "/random"
+      , subredditDisplayName = "Random"
+      }
+  , Subreddit
+      { subredditId = ""
+      , subredditType = "public"
+      , subredditUrl = "/top"
+      , subredditDisplayName = "Top"
+      }
+  , Subreddit
+      { subredditId = ""
+      , subredditType = "public"
+      , subredditUrl = "/controversial"
+      , subredditDisplayName = "Controversial"
+      }
+  ]
+
+getNextPosts :: (MonadThrow m, MonadIO m) => String -> String -> S.StateT (Cursor String) m [Link]
+getNextPosts token path = do
   cursor <- S.get
-  resp <- redditGetEndpoint token "/" cursor [("limit", Just "50")]
+  resp <- redditGetEndpoint token path cursor [("limit", Just "50")]
   S.put (after resp)
   return $ children resp
 

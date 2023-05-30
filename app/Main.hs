@@ -1,11 +1,12 @@
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
 import Control.Applicative
-import Control.Concurrent
-import Control.Concurrent.Async
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (async, withAsync)
 import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.IO.Class
@@ -16,6 +17,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Builder (byteString, toLazyByteString)
 import Data.ByteString.Char8 qualified as C8
+import Data.CaseInsensitive (original)
 import Data.Char
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
@@ -24,6 +26,7 @@ import Lib.Reddit.Oauth2
 import Lib.Reddit.Types
 import Lib.Utils
 import System.Directory
+import Text.Printf (PrintfArg, printf)
 import Web.Scotty (scotty)
 import Web.Scotty qualified as Scotty
 
@@ -32,8 +35,9 @@ import Brick.AttrMap qualified as A
 import Brick.BChan
 import Brick.Widgets.Border qualified as B
 import Brick.Widgets.List qualified as L
-import Control.Monad.Trans.Maybe
+import Control.Monad.Trans.Maybe (MaybeT (runMaybeT), hoistMaybe)
 import Data.Bits (Bits ((.|.)))
+import Data.List (sort)
 import Data.Vector qualified as Vec
 import Graphics.Vty qualified as V
 import Graphics.Vty.Input.Events
@@ -41,6 +45,7 @@ import Graphics.Vty.Input.Events
 data CustomEvent
   = GetPosts
   | GetPostsResult [Link] (Cursor String)
+  | GetSubredditsResult [Link]
   | GetComments String
   | GetCommentsResult [Link]
   deriving (Show)
@@ -49,6 +54,7 @@ data Name
   | PostName
   | PostBodyName
   | CommentsName
+  | SubredditsName
   deriving (Eq, Ord, Show)
 
 type LinkList = L.List Name Link
@@ -60,6 +66,9 @@ data AppState = AppState
   , tokenState :: String
   , appBChan :: BChan CustomEvent
   , showPost :: Bool
+  , showSubreddits :: Bool
+  , subredditState :: LinkList
+  , currentSubreddit :: Link
   }
 
 notSymbol :: Char -> Bool
@@ -71,8 +80,7 @@ linkWidget l = case destUrl l of
   Just u -> hyperlink (T.pack u) w
  where
   w =
-    txt "* "
-      <+> renderVotes (pUpVote l) (pDownVote l)
+    renderVotes (postScore l)
       <+> withAttr (attrName "subreddit") (str $ "(/r/" <> postSubreddit l <> ") ")
       <+> (txt . T.filter notSymbol $ postTitle l)
 
@@ -96,13 +104,16 @@ renderFocused :: Bool -> Widget n -> Widget n
 renderFocused focused w =
   if focused then withAttr (attrName "focused") w else w
 
-renderVotes :: (Show a, Show b) => a -> b -> Widget n
-renderVotes u d =
+renderVotes :: (PrintfArg t, Ord t, Num t) => t -> Widget n
+renderVotes s =
   txt "("
-    <+> withAttr (attrName "upvote") (str $ show $ u)
-    <+> txt "|"
-    <+> withAttr (attrName "downvote") (str $ show $ d)
+    <+> attr (str $ printf "%5d" s)
     <+> txt ")"
+ where
+  attr =
+    if s >= 0
+      then withAttr (attrName "upvote")
+      else withAttr (attrName "downvote")
 
 postListDrawElement :: Bool -> Link -> Widget Name
 postListDrawElement sel a =
@@ -112,12 +123,11 @@ postListDrawElement sel a =
         else w
 
 commentListDrawElement :: Link -> Widget Name
-commentListDrawElement a =
-  txt "* " <+> w
+commentListDrawElement a = w
  where
   w = case a of
-    Comment{commentBody = b, cUpVote = u, cDownVote = d} ->
-      renderVotes u d
+    Comment{commentBody = b, commentScore = sc} ->
+      renderVotes sc
         <+> maybe emptyWidget txt (b >>= renderHtml)
     More{} -> txt "more..."
     _ -> txt ""
@@ -135,7 +145,7 @@ drawPostsUI st = vBox [box, helpText]
       withVScrollBars OnRight $
         L.renderList postListDrawElement True $
           postsState st
-  helpText = txt "Press Q to exit"
+  helpText = txt "Press Q to exit; Press S to show subreddits"
 
 drawPostUI :: AppState -> Widget Name
 drawPostUI st =
@@ -150,14 +160,31 @@ drawPostUI st =
  where
   renderSelected (_, e) =
     B.borderWithLabel
-      (renderVotes (pUpVote e) (pDownVote e) <+> (txt . (" " <>) . T.filter notSymbol . postTitle $ e))
+      (renderVotes (postScore e) <+> (txt . (" " <>) . T.filter notSymbol . postTitle $ e))
       . viewport PostName Vertical
       $ (renderPostWidget e)
         <=> renderCommentWidget (commentState st)
 
-drawUI :: AppState -> [Widget Name]
-drawUI st = [ui]
+drawSubredditListElement :: Bool -> Link -> Widget Name
+drawSubredditListElement sel l =
+  if sel
+    then withAttr L.listSelectedAttr w
+    else w
  where
+  w = txt (original $ subredditDisplayName l)
+
+drawUI :: AppState -> [Widget Name]
+drawUI st = [subreddits, ui]
+ where
+  subreddits =
+    if showSubreddits st
+      then
+        hLimit 30 $
+          B.borderWithLabel (txt "Subreddits") $
+            withVScrollBars OnRight $
+              L.renderList drawSubredditListElement False $
+                (subredditState st)
+      else emptyWidget
   ui =
     if not $ showPost st
       then drawPostsUI st
@@ -194,7 +221,10 @@ appEvent (AppEvent GetPosts) = do
     void $
       async
         ( do
-            (posts, cursor) <- S.runStateT (getNextPosts $ tokenState st) (postsCursor st)
+            (posts, cursor) <-
+              S.runStateT
+                (getNextPosts (tokenState st) (subredditUrl $ currentSubreddit st))
+                (postsCursor st)
             writeBChan bchan (GetPostsResult posts cursor)
         )
 appEvent (AppEvent (GetComments cid)) = do
@@ -210,53 +240,85 @@ appEvent (AppEvent (GetComments cid)) = do
 appEvent (AppEvent (GetPostsResult posts cursor)) = do
   st <- MS.get
   let nl = (postsState st)
-  let curr = L.listSelected nl <|> Just 0
-  MS.put
-    st
-      { postsState = (L.listReplace (L.listElements nl <> Vec.fromList posts) curr nl)
-      , postsCursor = cursor
-      }
+  let c = postsCursor st
+  case c of
+    NoCursor -> do
+      MS.put
+        st
+          { postsState = (L.listReplace (Vec.fromList posts) (Just 0) nl)
+          , postsCursor = cursor
+          }
+    _ -> do
+      let curr = L.listSelected nl <|> Just 0
+      MS.put
+        st
+          { postsState = (L.listReplace (L.listElements nl <> Vec.fromList posts) curr nl)
+          , postsCursor = cursor
+          }
 appEvent (AppEvent (GetCommentsResult comments)) =
   MS.modify $ \st -> st{commentState = comments}
+appEvent (AppEvent (GetSubredditsResult srs)) = do
+  st <- MS.get
+  nsrs <-
+    nestEventM'
+      (subredditState st)
+      (MS.modify $ L.listReplace (defaultSubs <> Vec.fromList (sort srs)) (Just 0))
+  MS.put st{subredditState = nsrs}
 appEvent (VtyEvent (EvKey (KChar 'q') [])) = halt
+appEvent (VtyEvent (EvKey (KChar 's') [])) = MS.modify $ \s -> s{showSubreddits = (not $ showSubreddits s)}
 appEvent (VtyEvent e) = do
   st <- MS.get
+  let ssub = showSubreddits st
   let sp = showPost st
-  case e of
-    EvKey KEsc [] -> MS.modify $ \s -> (s{showPost = False})
-    EvKey key []
-      | sp ->
-          ( do
-              let vp = viewportScroll PostName
-              case key of
-                KUp -> vScrollBy vp (-1)
-                KDown -> vScrollBy vp 1
-                KPageUp -> vScrollPage vp Up
-                KPageDown -> vScrollPage vp Down
-                KHome -> vScrollToBeginning vp
-                KEnd -> vScrollToEnd vp
-                _ -> return ()
-          )
-      | not sp ->
-          ( case key of
-              KEnter -> do
-                vScrollToBeginning $ viewportScroll PostName
 
-                MS.modify $ \s -> s{showPost = True, commentState = []}
-                let bchan = appBChan st
-                void $ runMaybeT $ do
-                  (_, el) <- hoistMaybe . L.listSelectedElement $ (postsState st)
-                  case el of
-                    Post{postId = pid} -> do
-                      liftIO $ writeBChan bchan (GetComments pid)
-                    _ -> return ()
-              _ -> do
-                void $ handleNestedPostsState (L.handleListEventVi L.handleListEvent e)
-                loadNextPage
+  if ssub
+    then case e of
+      EvKey KEnter [] -> do
+        maybe
+          (return ())
+          ( \(_, s) -> do
+              let bchan = appBChan st
+              MS.put st{currentSubreddit = s, postsCursor = NoCursor}
+              liftIO $ writeBChan bchan GetPosts
           )
-    _ -> do
-      void $ handleNestedPostsState (L.handleListEventVi L.handleListEvent e)
-      loadNextPage
+          (L.listSelectedElement (subredditState st))
+        MS.modify $ \s -> s{showSubreddits = False, showPost = False}
+      _ -> do
+        nl <- nestEventM' (subredditState st) ((L.handleListEventVi L.handleListEvent e))
+        MS.put st{subredditState = nl}
+    else case e of
+      EvKey KEsc [] -> MS.modify $ \s -> (s{showPost = False})
+      EvKey key []
+        | sp ->
+            ( do
+                let vp = viewportScroll PostName
+                case key of
+                  KUp -> vScrollBy vp (-1)
+                  KDown -> vScrollBy vp 1
+                  KPageUp -> vScrollPage vp Up
+                  KPageDown -> vScrollPage vp Down
+                  KHome -> vScrollToBeginning vp
+                  KEnd -> vScrollToEnd vp
+                  _ -> return ()
+            )
+        | not sp ->
+            ( case key of
+                KEnter -> do
+                  vScrollToBeginning $ viewportScroll PostName
+
+                  MS.modify $ \s -> s{showPost = True, commentState = []}
+                  let bchan = appBChan st
+                  void $ runMaybeT $ do
+                    (_, el) <- hoistMaybe . L.listSelectedElement $ (postsState st)
+                    case el of
+                      Post{postId = pid} -> do
+                        liftIO $ writeBChan bchan (GetComments pid)
+                      _ -> return ()
+                _ -> do
+                  void $ handleNestedPostsState (L.handleListEventVi L.handleListEvent e)
+                  loadNextPage
+            )
+      _ -> return ()
 appEvent _ = return ()
 
 oauth :: Oauth2
@@ -274,9 +336,7 @@ customApp =
     { appDraw = drawUI
     , appChooseCursor = showFirstCursor
     , appHandleEvent = appEvent
-    , appStartEvent = do
-        bchan <- appBChan <$> MS.get
-        liftIO $ void $ writeBChanNonBlocking bchan GetPosts
+    , appStartEvent = return ()
     , appAttrMap = const theMap
     }
 
@@ -286,7 +346,7 @@ theMap =
     V.defAttr
     [ (L.listSelectedAttr, V.black `on` V.white)
     , (attrName "focused", V.black `on` V.white)
-    , (attrName "subreddit", style V.bold)
+    , (attrName "subreddit", V.defAttr `V.withForeColor` V.yellow)
     , (attrName "upvote", V.defAttr `V.withForeColor` V.red `V.withStyle` V.bold)
     , (attrName "downvote", V.defAttr `V.withForeColor` V.blue `V.withStyle` (V.bold .|. V.dim))
     ]
@@ -305,6 +365,23 @@ main = do
       t <- access_token <$> redditAccessToken oauth (refresh_token token)
 
       bchan <- newBChan 1
+      liftIO $
+        void $
+          async
+            ( do
+                (posts, cursor) <-
+                  S.runStateT
+                    (getNextPosts t (subredditUrl $ Vec.head defaultSubs))
+                    NoCursor
+                writeBChan bchan (GetPostsResult posts cursor)
+            )
+      liftIO $
+        void $
+          async
+            ( do
+                subreddits <- S.evalStateT (getAllSubreddits t) NoCursor
+                writeBChan bchan (GetSubredditsResult subreddits)
+            )
 
       let initialState =
             AppState
@@ -314,9 +391,15 @@ main = do
               , tokenState = t
               , appBChan = bchan
               , showPost = False
+              , showSubreddits = False
+              , subredditState = L.list SubredditsName Vec.empty 1
+              , currentSubreddit = Vec.head defaultSubs
               }
 
-      let buildVty = V.mkVty =<< V.standardIOConfig
+      let buildVty = do
+            v <- V.mkVty =<< V.standardIOConfig
+            V.setWindowTitle v "Reddit"
+            return v
       initialVty <- buildVty
 
       void $ customMain initialVty buildVty (Just bchan) customApp initialState

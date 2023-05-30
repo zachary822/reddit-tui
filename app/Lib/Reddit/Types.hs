@@ -1,23 +1,32 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Lib.Reddit.Types where
 
 import Control.Exception
 import Control.Monad
 import Data.Aeson
-import Data.Aeson.Types
+import Data.Aeson.Types (Parser)
+import Data.CaseInsensitive (CI, mk, original)
 import Data.Text qualified as T
-import GHC.Generics
+import GHC.Generics (Generic)
+
+instance FromJSON (CI T.Text) where
+  parseJSON = withText "CIString" $ \s ->
+    return $ mk s
+
+instance ToJSON (CI T.Text) where
+  toJSON = String . original
 
 data Link
   = Post
       { postSubreddit :: String
       , postId :: String
       , postAuthor :: String
-      , pUpVote :: Integer
-      , pDownVote :: Integer
+      , postScore :: Integer
       , postTitle :: T.Text
       , selfText :: Maybe T.Text
       , url :: String
@@ -27,8 +36,7 @@ data Link
       { commentSubreddit :: String
       , commentId :: String
       , commentAuthor :: String
-      , cUpVote :: Integer
-      , cDownVote :: Integer
+      , commentScore :: Integer
       , commentBody :: Maybe T.Text
       , replies :: [Link]
       }
@@ -36,12 +44,17 @@ data Link
       { moreName :: String
       , moreIds :: [String]
       }
-  | SubReddit
+  | Subreddit
       { subredditId :: String
-      , subredditTitle :: String
+      , subredditDisplayName :: CI T.Text
       , subredditType :: String
+      , subredditUrl :: String
       }
   deriving (Generic, Show, Eq)
+
+instance Ord Link where
+  Subreddit{subredditDisplayName = p1} `compare` Subreddit{subredditDisplayName = p2} = p1 `compare` p2
+  _ `compare` _ = EQ
 
 instance FromJSON Link where
   parseJSON = withObject "Link" $ \o -> do
@@ -60,8 +73,7 @@ instance FromJSON Link where
         s <- d .: "subreddit"
         l <- d .: "id"
         a <- d .: "author"
-        uv <- d .: "ups"
-        dv <- d .: "downs"
+        sc <- d .: "score"
         b <- d .:? "body_html"
         r <- (d .: "replies" :: Parser Value)
         rs <- case r of
@@ -72,8 +84,7 @@ instance FromJSON Link where
             { commentSubreddit = s
             , commentId = l
             , commentAuthor = a
-            , cUpVote = uv
-            , cDownVote = dv
+            , commentScore = sc
             , commentBody = b
             , replies = rs
             }
@@ -81,8 +92,7 @@ instance FromJSON Link where
         s <- d .: "subreddit"
         l <- d .: "id"
         a <- d .: "author"
-        uv <- d .: "ups"
-        dv <- d .: "downs"
+        sc <- d .: "score"
         t <- d .: "title"
         st <- d .:? "selftext_html"
         u <- d .: "url"
@@ -93,8 +103,7 @@ instance FromJSON Link where
             { postSubreddit = s
             , postId = l
             , postAuthor = a
-            , pUpVote = uv
-            , pDownVote = dv
+            , postScore = sc
             , postTitle = t
             , selfText = st
             , url = u
@@ -102,14 +111,16 @@ instance FromJSON Link where
             }
       "t5" -> do
         l <- d .: "id"
-        t <- d .: "title"
+        t <- d .: "display_name"
         p <- d .: "subreddit_type"
+        u <- d .: "url"
 
         return
-          SubReddit
+          Subreddit
             { subredditId = l
-            , subredditTitle = t
+            , subredditDisplayName = t
             , subredditType = p
+            , subredditUrl = u
             }
       _ -> throw (AesonException $ "bad kind: " <> k)
 
