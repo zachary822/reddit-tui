@@ -91,7 +91,6 @@ executable reddit-tui
                       vector,
                       mtl,
                       pandoc,
-                      html-entities,
                       case-insensitive,
                       time
 

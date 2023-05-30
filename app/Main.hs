@@ -19,7 +19,6 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Builder (byteString, toLazyByteString)
 import Data.ByteString.Char8 qualified as C8
 import Data.CaseInsensitive (original)
-import Data.Char
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import Lib.Api
@@ -74,9 +73,6 @@ data AppState = AppState
   , localTz :: TimeZone
   }
 
-notSymbol :: Char -> Bool
-notSymbol = (/= OtherSymbol) . generalCategory
-
 linkWidget :: Link -> Widget n
 linkWidget l = case destUrl l of
   Nothing -> w
@@ -85,7 +81,7 @@ linkWidget l = case destUrl l of
   w =
     renderVotes (postScore l)
       <+> withAttr (attrName "subreddit") (str $ "(/r/" <> postSubreddit l <> ") ")
-      <+> (txt . T.filter notSymbol $ postTitle l)
+      <+> (txt $ postTitle l)
 
 renderPostWidget :: TimeZone -> Link -> Widget Name
 renderPostWidget tz e =
@@ -140,7 +136,7 @@ commentListDrawElement tz comment = w
       )
         <=> maybe emptyWidget txt (b >>= renderHtml)
         <=> ( if length rs > 0
-                then (padLeft (Pad 3) $ vBox (map (commentListDrawElement tz) rs))
+                then (str "└───" <+> vBox (map (commentListDrawElement tz) rs))
                 else emptyWidget
             )
     More{} -> txt "more..."
@@ -175,7 +171,7 @@ drawPostUI st =
   ltz = (localTz st)
   renderSelected (_, e) =
     B.borderWithLabel
-      (renderVotes (postScore e) <+> (txt . (" " <>) . T.filter notSymbol . postTitle $ e))
+      (renderVotes (postScore e) <+> (txt . (" " <>) . postTitle $ e))
       . viewport PostName Vertical
       $ (renderPostWidget ltz e)
         <=> renderCommentWidget ltz (commentState st)
