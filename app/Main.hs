@@ -260,17 +260,12 @@ handleNestedPostsState e = do
   MS.put nst
   return nst
 
-openPostUrl :: (MonadIO m) => AppState -> m ()
+openPostUrl :: AppState -> IO ()
 openPostUrl st = do
   _ <- runMaybeT $ do
     (_, post) <- hoistMaybe $ L.listSelectedElement $ postsState st
     let u = fromMaybe (url post) (destUrl post)
-    guard (isURI u)
-    uri <- hoistMaybe $ parseURI u
-    guard $ (uriScheme uri) == "https:"
-    ua <- hoistMaybe $ uriAuthority uri
-    guard $ (uriUserInfo ua) == ""
-    liftIO $ openUrl u
+    openUrl u
   return ()
 
 appEvent :: BrickEvent Name CustomEvent -> EventM Name AppState ()
@@ -362,7 +357,7 @@ appEvent (VtyEvent e@(EvKey k mods)) = do
                         KPageDown -> vScrollPage vp Down
                         KHome -> vScrollToBeginning vp
                         KEnd -> vScrollToEnd vp
-                        KChar 'i' -> openPostUrl st
+                        KChar 'i' -> liftIO $ openPostUrl st
                         _ -> return ()
                   )
                 else
