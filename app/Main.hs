@@ -12,6 +12,7 @@ import Control.Concurrent.STM
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.State qualified as MS
+import Control.Monad.Trans.Maybe (MaybeT (runMaybeT), hoistMaybe)
 import Control.Monad.Trans.State qualified as S
 import Crypto.Random
 import Data.ByteString qualified as BS
@@ -25,6 +26,7 @@ import Lib.Api
 import Lib.Reddit.Oauth2
 import Lib.Reddit.Types
 import Lib.Utils
+import Network.URI (URI (uriAuthority, uriScheme), URIAuth (uriUserInfo), isURI, parseURI)
 import System.Directory
 import System.Exit (exitFailure)
 import Text.Printf (PrintfArg, printf)
@@ -38,7 +40,6 @@ import Brick.Keybindings qualified as K
 import Brick.Widgets.Border qualified as B
 import Brick.Widgets.Center qualified as C
 import Brick.Widgets.List qualified as L
-import Control.Monad.Trans.Maybe (MaybeT (runMaybeT), hoistMaybe)
 import Data.Bits (Bits ((.|.)))
 import Data.List (sort)
 import Data.Time (TimeZone, getCurrentTimeZone)
@@ -117,7 +118,7 @@ renderPostWidget tz e =
   reportExtent PostBodyName $
     header <=> case mt of
       Just t -> (padBottom (Pad 1) . strWrap $ url e) <=> txtWrap t
-      Nothing -> txtWrap $ fromMaybe (T.pack $ url e) (T.pack <$> destUrl e)
+      Nothing -> strWrap $ fromMaybe (url e) (destUrl e)
  where
   uwidget = withAttr (attrName "username") $ str ("/u/" <> (postAuthor e) <> " ")
   twidget = str $ formatTimestamp tz (postTimestamp e)
@@ -259,6 +260,19 @@ handleNestedPostsState e = do
   MS.put nst
   return nst
 
+openPostUrl :: (MonadIO m) => AppState -> m ()
+openPostUrl st = do
+  _ <- runMaybeT $ do
+    (_, post) <- hoistMaybe $ L.listSelectedElement $ postsState st
+    let u = fromMaybe (url post) (destUrl post)
+    guard (isURI u)
+    uri <- hoistMaybe $ parseURI u
+    guard $ (uriScheme uri) == "https:"
+    ua <- hoistMaybe $ uriAuthority uri
+    guard $ (uriUserInfo ua) == ""
+    liftIO $ openUrl u
+  return ()
+
 appEvent :: BrickEvent Name CustomEvent -> EventM Name AppState ()
 appEvent (AppEvent GetPosts) = do
   st <- MS.get
@@ -348,6 +362,7 @@ appEvent (VtyEvent e@(EvKey k mods)) = do
                         KPageDown -> vScrollPage vp Down
                         KHome -> vScrollToBeginning vp
                         KEnd -> vScrollToEnd vp
+                        KChar 'i' -> openPostUrl st
                         _ -> return ()
                   )
                 else

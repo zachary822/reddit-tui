@@ -7,6 +7,7 @@ import Data.Text (Text)
 import Data.Time (TimeZone, defaultTimeLocale, formatTime, utcToZonedTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime)
 import Lib.Reddit.Oauth2 (RedditToken)
+import System.Process (callProcess)
 import Text.Pandoc (def, readHtml, runPure, writePlain)
 import Text.Pandoc.Sources (ToSources)
 
@@ -23,3 +24,6 @@ getToken p = catch (eitherDecodeFileStrict' p) $ \e -> (return $ Left . show $ (
 
 formatTimestamp :: TimeZone -> POSIXTime -> String
 formatTimestamp tz t = formatTime defaultTimeLocale "%c" . utcToZonedTime tz . posixSecondsToUTCTime $ t
+
+openUrl :: String -> IO ()
+openUrl url = callProcess "open" [url]

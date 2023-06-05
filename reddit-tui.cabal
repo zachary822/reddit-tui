@@ -92,7 +92,8 @@ executable reddit-tui
                       mtl,
                       pandoc,
                       case-insensitive,
-                      time
+                      time,
+                      process
 
     -- Directories containing source files.
     hs-source-dirs:   app
