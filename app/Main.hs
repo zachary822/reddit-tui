@@ -26,7 +26,6 @@ import Lib.Api
 import Lib.Reddit.Oauth2
 import Lib.Reddit.Types
 import Lib.Utils
-import Network.URI (URI (uriAuthority, uriScheme), URIAuth (uriUserInfo), isURI, parseURI)
 import System.Directory
 import System.Exit (exitFailure)
 import Text.Printf (PrintfArg, printf)
