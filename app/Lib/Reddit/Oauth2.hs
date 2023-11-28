@@ -1,15 +1,14 @@
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Lib.Reddit.Oauth2 where
 
 import Control.Concurrent.STM
+import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
 import Data.Aeson hiding (Success)
 import Data.ByteString.Char8 qualified as C8
-import Data.List (intersperse)
 import GHC.Generics
 import Lib.Reddit.Types
 import Network.HTTP.Conduit
@@ -62,9 +61,9 @@ redditOauth oauth2 state =
     , "&redirect_uri="
     , escapeURIString' $ redirectUri oauth2
     , "&duration="
-    , (show . duration $ oauth2)
+    , show . duration $ oauth2
     , "&scope="
-    , escapeURIString' . concat . (intersperse " ") . scopes $ oauth2
+    , escapeURIString' . unwords . scopes $ oauth2
     ]
 
 redditCode :: (MonadThrow m, MonadIO m) => Oauth2 -> String -> m RedditToken
@@ -76,14 +75,13 @@ redditCode oauth code = do
           { method = "POST"
           , requestHeaders = ("User-Agent", "haskell-tui 0.1.0.0") : requestHeaders req
           , requestBody =
-              ( RequestBodyBS $
-                  C8.pack . concat $
-                    [ "grant_type=authorization_code&code="
-                    , code
-                    , "&redirect_uri="
-                    , redirectUri oauth
-                    ]
-              )
+              RequestBodyBS $
+                C8.pack . concat $
+                  [ "grant_type=authorization_code&code="
+                  , code
+                  , "&redirect_uri="
+                  , redirectUri oauth
+                  ]
           }
 
   resp <- httpJSON req'
@@ -131,13 +129,12 @@ redditGetEndpoint accessToken endpoint cursor opts = do
 
 oauthCallback :: Oauth2 -> String -> TChan TokenStatus -> FilePath -> ActionM ()
 oauthCallback oauth state chan tokenPath = do
-  st <- (Scotty.param "state" :: ActionM String)
+  st <- Scotty.queryParam "state"
 
-  if st /= state
-    then Scotty.raise "Error: reauthenticate by restarting the app"
-    else return ()
+  when (st /= state) $
+    Scotty.raise "Error: reauthenticate by restarting the app"
 
-  code <- (Scotty.param "code" :: ActionM String)
+  code <- Scotty.queryParam "code"
 
   result <- redditCode oauth code
 

@@ -1,4 +1,3 @@
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-type-defaults #-}
@@ -45,6 +44,7 @@ import Data.Time (TimeZone, getCurrentTimeZone)
 import Data.Vector qualified as Vec
 import Graphics.Vty qualified as V
 import Graphics.Vty.Input.Events
+import Graphics.Vty.Platform.Unix (mkVty)
 
 type LinkList = L.List Name Link
 
@@ -82,8 +82,8 @@ defaultBindings =
 handlers :: [K.KeyEventHandler KeyEvent (EventM Name AppState)]
 handlers =
   [ K.onEvent QuitEvent "Quit the program" halt
-  , K.onEvent ShowHelp "Show Help" $ MS.modify $ \st -> st{showHelp = (not $ showHelp st)}
-  , K.onEvent ShowSubreddits "Show Subreddits" $ MS.modify $ \st -> st{showSubreddits = (not $ showSubreddits st)}
+  , K.onEvent ShowHelp "Show Help" $ MS.modify $ \st -> st{showHelp = not $ showHelp st}
+  , K.onEvent ShowSubreddits "Show Subreddits" $ MS.modify $ \st -> st{showSubreddits = not $ showSubreddits st}
   ]
 
 data AppState = AppState
@@ -110,7 +110,7 @@ linkWidget l = case destUrl l of
   w =
     renderVotes (postScore l)
       <+> withAttr (attrName "subreddit") (str $ "(/r/" <> postSubreddit l <> ") ")
-      <+> (txt $ postTitle l)
+      <+> txt (postTitle l)
 
 renderPostWidget :: TimeZone -> Link -> Widget Name
 renderPostWidget tz e =
@@ -119,7 +119,7 @@ renderPostWidget tz e =
       Just t -> (padBottom (Pad 1) . strWrap $ url e) <=> txtWrap t
       Nothing -> strWrap $ fromMaybe (url e) (destUrl e)
  where
-  uwidget = withAttr (attrName "username") $ str ("/u/" <> (postAuthor e) <> " ")
+  uwidget = withAttr (attrName "username") $ str ("/u/" <> postAuthor e <> " ")
   twidget = str $ formatTimestamp tz (postTimestamp e)
   header = uwidget <+> twidget
   mt = renderHtml <=< selfText $ e
@@ -127,11 +127,12 @@ renderPostWidget tz e =
 renderCommentWidget :: TimeZone -> [Link] -> Widget Name
 renderCommentWidget tz list =
   B.hBorderWithLabel (txt "Comments")
-    <=> ( reportExtent CommentsName $
-            if length list > 0
-              then (vBox $ map (commentListDrawElement tz) list)
-              else txt "Fetching..."
-        )
+    <=> reportExtent
+      CommentsName
+      ( if not (null list)
+          then vBox $ map (commentListDrawElement tz) list
+          else txt "Fetching..."
+      )
 
 renderFocused :: Bool -> Widget n -> Widget n
 renderFocused focused w =
@@ -161,12 +162,12 @@ commentListDrawElement tz comment = w
   w = case comment of
     Comment{commentBody = b, commentScore = sc, commentAuthor = a, commentTimestamp = t, replies = rs} ->
       ( renderVotes sc
-          <+> (withAttr (attrName "username") $ str (" /u/" <> a <> " "))
-          <+> (withAttr (attrName "timestamp") $ str (formatTimestamp tz t))
+          <+> withAttr (attrName "username") (str (" /u/" <> a <> " "))
+          <+> withAttr (attrName "timestamp") (str (formatTimestamp tz t))
       )
         <=> maybe emptyWidget txt (b >>= renderHtml)
-        <=> ( if length rs > 0
-                then (str "└───" <+> vBox (map (commentListDrawElement tz) rs))
+        <=> ( if not (null rs)
+                then str "└───" <+> vBox (map (commentListDrawElement tz) rs)
                 else emptyWidget
             )
     More{} -> txt "more..."
@@ -195,12 +196,12 @@ drawPostUI st =
     . postsState
     $ st
  where
-  ltz = (localTz st)
+  ltz = localTz st
   renderSelected (_, e) =
     B.borderWithLabel
       (renderVotes (postScore e) <+> (txt . (" " <>) . postTitle $ e))
       . viewport PostName Vertical
-      $ (renderPostWidget ltz e)
+      $ renderPostWidget ltz e
         <=> renderCommentWidget ltz (commentState st)
 
 drawSubredditListElement :: Bool -> Link -> Widget Name
@@ -221,14 +222,14 @@ drawUI st = [keybindingHelp, subreddits, ui]
           B.borderWithLabel (txt "Subreddits") $
             withVScrollBars OnRight $
               L.renderList drawSubredditListElement False $
-                (subredditState st)
+                subredditState st
       else emptyWidget
   ui =
     if not $ showPost st
       then drawPostsUI st
       else drawPostUI st
   keybindingHelp =
-    if (showHelp st)
+    if showHelp st
       then
         C.centerLayer
           . B.borderWithLabel (txt "Active Keybindings")
@@ -245,15 +246,13 @@ loadNextPage = do
   let end = case curr of
         Nothing -> True
         Just n -> n + 1 == total
-  if end
-    then liftIO $ void $ writeBChanNonBlocking (appBChan st) GetPosts
-    else return ()
+  when end $ liftIO $ void $ writeBChanNonBlocking (appBChan st) GetPosts
   MS.put st{postsState = nl}
 
 handleNestedPostsState :: EventM n LinkList b -> EventM n AppState AppState
 handleNestedPostsState e = do
   st <- MS.get
-  let l = (postsState st)
+  let l = postsState st
   nl <- nestEventM' l e
   let nst = st{postsState = nl}
   MS.put nst
@@ -293,20 +292,20 @@ appEvent (AppEvent (GetComments cid)) = do
         )
 appEvent (AppEvent (GetPostsResult posts cursor)) = do
   st <- MS.get
-  let nl = (postsState st)
+  let nl = postsState st
   let c = postsCursor st
   case c of
     NoCursor -> do
       MS.put
         st
-          { postsState = (L.listReplace (Vec.fromList posts) (Just 0) nl)
+          { postsState = L.listReplace (Vec.fromList posts) (Just 0) nl
           , postsCursor = cursor
           }
     _ -> do
       let curr = L.listSelected nl <|> Just 0
       MS.put
         st
-          { postsState = (L.listReplace (L.listElements nl <> Vec.fromList posts) curr nl)
+          { postsState = L.listReplace (L.listElements nl <> Vec.fromList posts) curr nl
           , postsCursor = cursor
           }
 appEvent (AppEvent (GetCommentsResult comments)) =
@@ -322,62 +321,60 @@ appEvent (VtyEvent e@(EvKey k mods)) = do
   st <- MS.get
   h <- K.handleKey (dispatcher st) k mods
 
-  if not h
-    then
-      if showSubreddits st
-        then case e of
-          EvKey KEnter [] -> do
-            maybe
-              (return ())
-              ( \(_, s) -> do
-                  let bchan = appBChan st
-                  MS.put st{currentSubreddit = s, postsCursor = NoCursor}
-                  liftIO $ writeBChan bchan GetPosts
-              )
-              (L.listSelectedElement (subredditState st))
-            MS.modify $ \s -> s{showSubreddits = False, showPost = False}
-          _ -> do
-            nl <- nestEventM' (subredditState st) ((L.handleListEventVi L.handleListEvent e))
-            MS.put st{subredditState = nl}
-        else do
-          let sp = showPost st
-          case e of
-            EvKey KEsc [] -> MS.modify $ \s -> (s{showPost = False})
-            EvKey key [] ->
-              if sp
-                then
-                  ( do
-                      let vp = viewportScroll PostName
+  unless h $
+    if showSubreddits st
+      then case e of
+        EvKey KEnter [] -> do
+          maybe
+            (return ())
+            ( \(_, s) -> do
+                let bchan = appBChan st
+                MS.put st{currentSubreddit = s, postsCursor = NoCursor}
+                liftIO $ writeBChan bchan GetPosts
+            )
+            (L.listSelectedElement (subredditState st))
+          MS.modify $ \s -> s{showSubreddits = False, showPost = False}
+        _ -> do
+          nl <- nestEventM' (subredditState st) (L.handleListEventVi L.handleListEvent e)
+          MS.put st{subredditState = nl}
+      else do
+        let sp = showPost st
+        case e of
+          EvKey KEsc [] -> MS.modify $ \s -> (s{showPost = False})
+          EvKey key [] ->
+            if sp
+              then
+                ( do
+                    let vp = viewportScroll PostName
 
-                      case key of
-                        KUp -> vScrollBy vp (-1)
-                        KDown -> vScrollBy vp 1
-                        KPageUp -> vScrollPage vp Up
-                        KPageDown -> vScrollPage vp Down
-                        KHome -> vScrollToBeginning vp
-                        KEnd -> vScrollToEnd vp
-                        KChar 'i' -> liftIO $ openPostUrl st
-                        _ -> return ()
-                  )
-                else
-                  ( case key of
-                      KEnter -> do
-                        vScrollToBeginning $ viewportScroll PostName
+                    case key of
+                      KUp -> vScrollBy vp (-1)
+                      KDown -> vScrollBy vp 1
+                      KPageUp -> vScrollPage vp Up
+                      KPageDown -> vScrollPage vp Down
+                      KHome -> vScrollToBeginning vp
+                      KEnd -> vScrollToEnd vp
+                      KChar 'i' -> liftIO $ openPostUrl st
+                      _ -> return ()
+                )
+              else
+                ( case key of
+                    KEnter -> do
+                      vScrollToBeginning $ viewportScroll PostName
 
-                        MS.modify $ \s -> s{showPost = True, commentState = []}
-                        let bchan = appBChan st
-                        void $ runMaybeT $ do
-                          (_, el) <- hoistMaybe . L.listSelectedElement $ (postsState st)
-                          case el of
-                            Post{postId = pid} -> do
-                              liftIO $ writeBChan bchan (GetComments pid)
-                            _ -> return ()
-                      _ -> do
-                        void $ handleNestedPostsState (L.handleListEventVi L.handleListEvent e)
-                        loadNextPage
-                  )
-            _ -> return ()
-    else return ()
+                      MS.modify $ \s -> s{showPost = True, commentState = []}
+                      let bchan = appBChan st
+                      void $ runMaybeT $ do
+                        (_, el) <- hoistMaybe . L.listSelectedElement $ postsState st
+                        case el of
+                          Post{postId = pid} -> do
+                            liftIO $ writeBChan bchan (GetComments pid)
+                          _ -> return ()
+                    _ -> do
+                      void $ handleNestedPostsState (L.handleListEventVi L.handleListEvent e)
+                      loadNextPage
+                )
+          _ -> return ()
 appEvent _ = return ()
 
 oauth :: Oauth2
@@ -448,7 +445,7 @@ main = do
       let kc = K.newKeyConfig allKeyEvents defaultBindings [] -- custom bindings go here
       d <-
         either
-          (\_ -> exitFailure)
+          (const exitFailure)
           return
           $ K.keyDispatcher kc handlers
 
@@ -470,7 +467,7 @@ main = do
               }
 
       let buildVty = do
-            v <- V.mkVty =<< V.standardIOConfig
+            v <- mkVty V.defaultConfig
             V.setWindowTitle v "Reddit"
             return v
       initialVty <- buildVty
@@ -491,7 +488,7 @@ main = do
         )
         ( \_ -> do
             status <- atomically $ readTChan chan
-            putStrLn $ show status
+            print status
 
             case status of
               Success -> threadDelay 1000000

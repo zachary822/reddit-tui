@@ -167,7 +167,7 @@ instance ToJSON Listing where
 data MoreComments = MoreComments
   { things :: [Link]
   }
-  deriving (Generic, Show)
+  deriving (Generic, Show, Eq)
 
 instance FromJSON MoreComments where
   parseJSON =
