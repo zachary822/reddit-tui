@@ -2,6 +2,13 @@
 
 module Main where
 
+import Brick
+import Brick.AttrMap qualified as A
+import Brick.BChan (BChan, newBChan, writeBChan, writeBChanNonBlocking)
+import Brick.Keybindings qualified as K
+import Brick.Widgets.Border qualified as B
+import Brick.Widgets.Center qualified as C
+import Brick.Widgets.List qualified as L
 import Control.Applicative
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, withAsync)
@@ -12,13 +19,19 @@ import Control.Monad.State qualified as MS
 import Control.Monad.Trans.Maybe (MaybeT (runMaybeT), hoistMaybe)
 import Control.Monad.Trans.State qualified as S
 import Crypto.Random
+import Data.Bits (Bits ((.|.)))
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Builder (byteString, toLazyByteString)
 import Data.ByteString.Char8 qualified as C8
 import Data.CaseInsensitive (original)
+import Data.List (sort)
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
+import Data.Time (TimeZone, getCurrentTimeZone)
+import Data.Vector qualified as Vec
+import Graphics.Vty qualified as V
+import Graphics.Vty.Input.Events
+import Graphics.Vty.Platform.Unix (mkVty)
 import Lib.Api
 import Lib.Reddit.Oauth2
 import Lib.Reddit.Types
@@ -28,21 +41,6 @@ import System.Exit (exitFailure)
 import Text.Printf (PrintfArg, printf)
 import Web.Scotty (scotty)
 import Web.Scotty qualified as Scotty
-
-import Brick
-import Brick.AttrMap qualified as A
-import Brick.BChan (BChan, newBChan, writeBChan, writeBChanNonBlocking)
-import Brick.Keybindings qualified as K
-import Brick.Widgets.Border qualified as B
-import Brick.Widgets.Center qualified as C
-import Brick.Widgets.List qualified as L
-import Data.Bits (Bits ((.|.)))
-import Data.List (sort)
-import Data.Time (TimeZone, getCurrentTimeZone)
-import Data.Vector qualified as Vec
-import Graphics.Vty qualified as V
-import Graphics.Vty.Input.Events
-import Graphics.Vty.Platform.Unix (mkVty)
 
 type LinkList = L.List Name Link
 
@@ -421,7 +419,7 @@ main = do
       t <- access_token <$> redditAccessToken oauth (refresh_token token)
 
       bchan <- newBChan 1
-      liftIO $
+      liftIO $ do
         void $
           async
             ( do
@@ -431,7 +429,6 @@ main = do
                     NoCursor
                 writeBChan bchan (GetPostsResult posts cursor)
             )
-      liftIO $
         void $
           async
             ( do
@@ -477,7 +474,7 @@ main = do
       withAsync
         ( do
             rb <- (getRandomBytes 16 :: IO BS.ByteString)
-            let st = C8.unpack . B16.encode . BS.toStrict . toLazyByteString $ byteString rb
+            let st = C8.unpack . B16.encode $ rb
             -- prints login link to terminal
             putStrLn $ redditOauth oauth st
 
@@ -490,6 +487,6 @@ main = do
 
             case status of
               Success -> threadDelay 1000000
-              Fail -> error "Token fetching went terribly."
+              Fail -> fail "Token fetching went terribly."
         )
       main

@@ -4,6 +4,7 @@
 module Lib.Reddit.Oauth2 where
 
 import Control.Concurrent.STM
+import Control.Exception
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
@@ -16,6 +17,10 @@ import Network.HTTP.Simple
 import Network.URI (escapeURIString, isAllowedInURI)
 import Web.Scotty (ActionM)
 import Web.Scotty qualified as Scotty
+
+data RedditException = StateMismatch deriving (Show)
+
+instance Exception RedditException
 
 data TokenStatus = Success | Fail deriving (Eq, Show)
 
@@ -68,7 +73,9 @@ redditOauth oauth2 state =
 
 redditCode :: (MonadThrow m, MonadIO m) => Oauth2 -> String -> m RedditToken
 redditCode oauth code = do
-  req <- setRequestBasicAuth (C8.pack $ cliendId oauth) "" <$> parseRequest "https://www.reddit.com/api/v1/access_token"
+  req <-
+    setRequestBasicAuth (C8.pack $ cliendId oauth) ""
+      <$> parseRequest "https://www.reddit.com/api/v1/access_token"
 
   let req' =
         req
@@ -87,21 +94,28 @@ redditCode oauth code = do
   resp <- httpJSON req'
   return $ getResponseBody resp
 
-redditAccessToken :: (MonadThrow m, MonadIO m) => Oauth2 -> String -> m RedditToken
+redditAccessToken ::
+  (MonadThrow m, MonadIO m) => Oauth2 -> String -> m RedditToken
 redditAccessToken oauth refreshToken = do
-  req <- setRequestBasicAuth (C8.pack $ cliendId oauth) "" <$> parseRequest "https://www.reddit.com/api/v1/access_token"
+  req <-
+    setRequestBasicAuth (C8.pack $ cliendId oauth) ""
+      <$> parseRequest "https://www.reddit.com/api/v1/access_token"
 
   let req' =
         req
           { method = "POST"
           , requestHeaders = ("User-Agent", "haskell-tui 0.1.0.0") : requestHeaders req
-          , requestBody = RequestBodyBS ("grant_type=refresh_token&refresh_token=" <> C8.pack refreshToken)
+          , requestBody =
+              RequestBodyBS
+                ("grant_type=refresh_token&refresh_token=" <> C8.pack refreshToken)
           }
 
   resp <- httpJSON req'
   return $ getResponseBody resp
 
-redditGetEndpoint :: (MonadThrow m, MonadIO m, FromJSON a) => String -> String -> Cursor String -> Query -> m a
+redditGetEndpoint ::
+  (MonadThrow m, MonadIO m, FromJSON a) =>
+  String -> String -> Cursor String -> Query -> m a
 redditGetEndpoint accessToken endpoint cursor opts = do
   req <- parseRequest ("https://oauth.reddit.com" ++ endpoint)
   let req' =
@@ -131,8 +145,7 @@ oauthCallback :: Oauth2 -> String -> TChan TokenStatus -> FilePath -> ActionM ()
 oauthCallback oauth state chan tokenPath = do
   st <- Scotty.queryParam "state"
 
-  when (st /= state) $
-    Scotty.raise "Error: reauthenticate by restarting the app"
+  when (st /= state) $ Scotty.throw StateMismatch
 
   code <- Scotty.queryParam "code"
 
