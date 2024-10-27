@@ -14,11 +14,12 @@ import System.Process (callProcess)
 import Text.Pandoc (def, readHtml, runPure, writePlain)
 import Text.Pandoc.Sources (ToSources)
 
+eitherToMaybe :: Either a b -> Maybe b
+eitherToMaybe = either (const Nothing) Just
+
 renderHtml :: (ToSources a) => a -> Maybe Text
 renderHtml =
-  either
-    (const Nothing)
-    Just
+  eitherToMaybe
     . runPure
     . (writePlain def <=< readHtml def)
 
@@ -26,9 +27,11 @@ getToken :: FilePath -> IO (Either String RedditToken)
 getToken p = catch (eitherDecodeFileStrict' p) $ \e -> (return $ Left . show $ (e :: IOException))
 
 formatTimestamp :: TimeZone -> POSIXTime -> String
-formatTimestamp tz t = formatTime defaultTimeLocale "%c" . utcToZonedTime tz . posixSecondsToUTCTime $ t
+formatTimestamp tz t =
+  formatTime defaultTimeLocale "%c" . utcToZonedTime tz . posixSecondsToUTCTime $
+    t
 
-openUrl :: MonadIO m => String -> MaybeT m ()
+openUrl :: (MonadIO m) => String -> MaybeT m ()
 openUrl url = do
   guard (isURI url)
   uri <- hoistMaybe $ parseURI url
